@@ -1,8 +1,6 @@
 package main
 
-import (
-	http "github.com/Pat-is-trying/discord-bot/http"
-)
+import "discord-bot/bot-v1/http"
 
 func main() {
 	http.Init()
