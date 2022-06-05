@@ -1,13 +1,21 @@
 package router
 
 import (
+	"context"
+	"discord-bot/pkg/database"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
+
+var wg = sync.WaitGroup{}
 
 func SetRouter(s *discordgo.Session) {
 	s.AddHandler(messageCreate)
@@ -27,8 +35,12 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	} else if m.Content == "pong" {
 		s.ChannelMessageSend(m.ChannelID, "Ping!")
 	} else if m.Content == "joke" {
-		var joke *JokeResponse = &JokeResponse{}
-		joke.getJoke(s, m)
+		joke := fetchJoke(s, m)
+		
+		wg.Add(2)
+		go s.ChannelMessageSend(m.ChannelID, joke.Joke)
+		go saveJoke(joke)
+		wg.Wait()
 	}
 }
 
@@ -37,13 +49,16 @@ func messageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
 	s.ChannelMessageSend(m.ChannelID, "https://stayhipp.com/wp-content/uploads/2019/02/you-better-watch.jpg")
 }
 
-// Playing around with structs
 type JokeResponse struct {
-	Joke string `json:"joke"`
+	Joke string `json:"joke" bson:"joke"`
 }
 
-// Playing around with methods
-func (j *JokeResponse) getJoke(s *discordgo.Session, m *discordgo.MessageCreate) {
+func (j *JokeResponse) GetDoc() (primitive.D) {
+	return bson.D{{"joke", j.Joke}}
+}
+
+func fetchJoke(s *discordgo.Session, m *discordgo.MessageCreate) (*JokeResponse) {
+
 	client := &http.Client{}
 
 	req, _ := http.NewRequest("GET", "https://icanhazdadjoke.com", nil)
@@ -52,11 +67,25 @@ func (j *JokeResponse) getJoke(s *discordgo.Session, m *discordgo.MessageCreate)
 
 	res, _ := client.Do(req)
 
+	j := &JokeResponse{}
 	data, _ := ioutil.ReadAll(res.Body)
 	err := json.Unmarshal(data, &j)
 	if err != nil {
 		log.Panic(err)
 	}
+	return j
+}
 
-	s.ChannelMessageSend(m.ChannelID, j.Joke)
+func saveJoke(j database.DbConnected) {
+
+	client := database.Connect()
+	coll := client.Database(database.DATABASE).Collection(database.SCHEMA_JOKES)
+
+	fmt.Println("Saving joke...")
+	_, err := coll.InsertOne(context.TODO(), j.GetDoc())
+	if err != nil {
+		fmt.Println("Error saving joke!")
+		return
+	}
+	fmt.Println("Joke Saved!")
 }
